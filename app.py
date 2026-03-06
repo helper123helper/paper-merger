@@ -4,10 +4,10 @@ from docx.shared import RGBColor
 import io
 import re
 
-st.set_page_config(page_title="HSC 試卷完美對位工具", page_icon="🎓")
+st.set_page_config(page_title="HSC 專業對位工具", page_icon="🎓")
 
-st.title("🎓 HSC 模擬考：教學檔生成工具 (完美版)")
-st.info("已修復：表格內(a)(b)錯位問題，直接將表格答案內容 copy 到題目下方或表格內。")
+st.title("🎓 HSC 模擬考：全自動表格對位工具")
+st.markdown("### 修正：直接抓取文字答案，跳過英文字母題號")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -21,7 +21,7 @@ if file_q and file_ans:
             doc_q = Document(file_q)
             doc_ans = Document(file_ans)
             
-            # --- 1. 抓取答案庫 (過濾題號與分數，只留核心文字) ---
+            # --- 1. 抓取答案 (精準過濾英文字母題號) ---
             ans_list = []
             for table in doc_ans.tables:
                 for row in table.rows:
@@ -31,34 +31,39 @@ if file_q and file_ans:
                         if any(x in cells[0] for x in ["題號", "Part", "姓名", "班別"]):
                             continue
                         
-                        # 從第二欄開始找真正的答案 (排除單個字母題號和純數字分數)
-                        target_ans = ""
-                        for candidate in cells[1:]:
-                            clean_c = candidate.strip()
-                            if clean_c and not clean_c.isdigit() and len(clean_c) > 1:
-                                if "建議答案" not in clean_c:
-                                    target_ans = clean_c
-                                    break
-                        
-                        if target_ans:
-                            # 移除答案內重複的分數標記
-                            target_ans = re.sub(r'[\(（]\s*\d+\s*分\s*[\)）]', '', target_ans).strip()
-                            ans_list.append(target_ans)
+                        # 在該行的儲存格中尋找真正的文字答案
+                        # 邏輯：長度大於 1 且不是純數字，避開 a, b, c 和分數
+                        for cell_content in cells:
+                            c = cell_content.strip()
+                            if len(c) > 1 and not c.isdigit() and "建議答案" not in c:
+                                # 移除 (分) 標記
+                                clean_ans = re.sub(r'[\(（]\s*\d+\s*分\s*[\)）]', '', c).strip()
+                                if clean_ans:
+                                    ans_list.append(clean_ans)
+                                    break # 每一行只抓一個核心答案
 
-            # --- 2. 處理題目卷中的表格 (如第一題表格) ---
+            # --- 2. 處理題目卷 (Q) ---
             ans_ptr = 0
-            for q_table in doc_q.tables:
-                for row in q_table.rows:
-                    # 如果該列最後一格是空的，我們就填入答案
-                    if ans_ptr < len(ans_list):
-                        # 檢查是否為需要填寫的表格列 (通常最後兩格是空的)
-                        if not row.cells[-1].text.strip():
-                            row.cells[-1].text = ans_list[ans_ptr]
-                            # 設為藍色加粗
-                            for paragraph in row.cells[-1].paragraphs:
-                                for run in paragraph.runs:
-                                    run.font.bold = True
-                                    run.font.color.rgb = RGBColor(0, 102, 204)
-                            ans_ptr += 1
-
-            # --- 3. 處理段
+            start_merging = False
+            # 封面關鍵字
+            cover_keywords = ["姓名", "班別", "學號", "成績", "年度", "考試時間"]
+            
+            for para in doc_q.paragraphs:
+                text = para.text.strip()
+                
+                # 只有看到「甲部」才開始，徹底避開封面走位
+                if "甲部" in text:
+                    start_merging = True
+                
+                if not start_merging:
+                    continue
+                
+                # 偵測題目：結尾有 (分)
+                if re.search(r'[\(（]\s*\d+\s*分\s*[\)）]$', text):
+                    # 確保不是封面欄位
+                    if not any(k in text for k in cover_keywords):
+                        if ans_ptr < len(ans_list):
+                            if "【建議答案】" not in para.text:
+                                run = para.add_run(f"\n【建議答案】：{ans_list[ans_ptr]}")
+                                run.font.bold = True
+                                run.font.color.rgb = RGBColor(0,
